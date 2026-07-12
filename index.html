@@ -749,7 +749,7 @@
     </section>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
 
   <script type="module">
@@ -1193,7 +1193,22 @@
       const book = window.ePub();
 
       try {
-        await book.open(await file.arrayBuffer(), "binary");
+        const bookData = await readEpubFile(file);
+
+        try {
+          await book.open(bookData, "binary");
+        } catch (error) {
+          if (isCentralDirectoryError(error)) {
+            const compatibilityError = new Error(
+              "Das EPUB hat zwar eine ZIP-Struktur, kann aber von der eingebauten ZIP-Bibliothek nicht gelesen werden."
+            );
+            compatibilityError.code = "EPUB_UNSUPPORTED_ZIP";
+            throw compatibilityError;
+          }
+
+          throw error;
+        }
+
         const metadata = await book.loaded.metadata;
         const rawCover = await extractEpubCover(book);
 
@@ -1205,6 +1220,120 @@
       } finally {
         try { book.destroy(); } catch (error) { console.warn(error); }
       }
+    }
+
+    async function readEpubFile(file) {
+      let buffer;
+
+      /*
+       * FileReader ist auf Android bei Dateien aus Dokumentanbietern oft
+       * zuverlässiger als ein direkter file.arrayBuffer()-Aufruf.
+       */
+      try {
+        buffer = await readBlobWithFileReader(file);
+      } catch (fileReaderError) {
+        console.warn("FileReader fehlgeschlagen, ArrayBuffer-Fallback wird verwendet:", fileReaderError);
+        buffer = await file.arrayBuffer();
+      }
+
+      if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) {
+        const error = new Error("Die ausgewählte Datei enthält keine lesbaren Daten.");
+        error.code = "EPUB_EMPTY";
+        throw error;
+      }
+
+      if (Number.isFinite(file.size) && file.size > 0 && buffer.byteLength !== file.size) {
+        const error = new Error(
+          "Die Datei wurde vom Android-Dateidialog nur unvollständig geliefert."
+        );
+        error.code = "EPUB_INCOMPLETE_READ";
+        throw error;
+      }
+
+      validateEpubContainer(buffer);
+      return buffer.slice(0);
+    }
+
+    function readBlobWithFileReader(blob) {
+      return new Promise(function (resolve, reject) {
+        const reader = new FileReader();
+
+        reader.onload = function () {
+          if (reader.result instanceof ArrayBuffer) resolve(reader.result);
+          else reject(new Error("Die Datei konnte nicht binär gelesen werden."));
+        };
+
+        reader.onerror = function () {
+          reject(reader.error || new Error("Die Datei konnte nicht gelesen werden."));
+        };
+
+        reader.onabort = function () {
+          reject(new Error("Das Lesen der Datei wurde abgebrochen."));
+        };
+
+        reader.readAsArrayBuffer(blob);
+      });
+    }
+
+    function validateEpubContainer(buffer) {
+      const bytes = new Uint8Array(buffer);
+      const hasZipHeader =
+        bytes.length >= 4 &&
+        bytes[0] === 0x50 &&
+        bytes[1] === 0x4b &&
+        (
+          (bytes[2] === 0x03 && bytes[3] === 0x04) ||
+          (bytes[2] === 0x05 && bytes[3] === 0x06) ||
+          (bytes[2] === 0x07 && bytes[3] === 0x08)
+        );
+
+      if (hasEndOfCentralDirectory(bytes)) return;
+
+      const preview = new TextDecoder("utf-8", { fatal: false })
+        .decode(bytes.subarray(0, Math.min(bytes.length, 2048)))
+        .toLowerCase();
+
+      let code = "EPUB_TRUNCATED_ARCHIVE";
+      let message = "Das ZIP-Ende des EPUB fehlt. Die Datei ist wahrscheinlich unvollständig oder beschädigt.";
+
+      if (preview.includes("fulfillmenttoken") || preview.includes(".acsm") || preview.includes("application/vnd.adobe.adept+xml")) {
+        code = "EPUB_IS_ACSM";
+        message = "Die Datei ist eine Adobe-ACSM-Downloadberechtigung und kein EPUB.";
+      } else if (preview.includes("<!doctype html") || preview.includes("<html")) {
+        code = "EPUB_IS_HTML";
+        message = "Die Datei enthält eine Webseite statt eines EPUB-Archivs.";
+      } else if (!hasZipHeader) {
+        code = "EPUB_NOT_ZIP";
+        message = "Die Datei trägt die Endung .epub, ist aber kein gültiges ZIP-basiertes EPUB.";
+      }
+
+      const error = new Error(message);
+      error.code = code;
+      throw error;
+    }
+
+    function hasEndOfCentralDirectory(bytes) {
+      if (bytes.length < 22) return false;
+
+      const signatureStart = Math.max(0, bytes.length - 65557);
+
+      for (let index = bytes.length - 22; index >= signatureStart; index -= 1) {
+        if (
+          bytes[index] === 0x50 &&
+          bytes[index + 1] === 0x4b &&
+          bytes[index + 2] === 0x05 &&
+          bytes[index + 3] === 0x06
+        ) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    function isCentralDirectoryError(error) {
+      const message = String(error?.message || "").toLowerCase();
+      return message.includes("central directory") || message.includes("corrupted zip");
     }
 
     async function extractEpubCover(book) {
@@ -2718,9 +2847,29 @@
       if (error?.name === "QuotaExceededError") {
         return "Nicht genug lokaler Speicher für diese Datei.";
       }
+
       if (String(error?.message || "").toLowerCase().includes("password")) {
         return "Passwortgeschützte PDFs werden noch nicht unterstützt.";
       }
+
+      const epubMessages = {
+        EPUB_EMPTY: "Das EPUB ist leer oder konnte nicht vom Dateianbieter gelesen werden.",
+        EPUB_INCOMPLETE_READ: "Android hat das EPUB nur teilweise geliefert. Kopiere die Datei zunächst in den lokalen Download-Ordner und wähle sie dort erneut aus.",
+        EPUB_IS_ACSM: "Das ist eine ACSM-Datei und noch kein EPUB. Sie muss zuerst mit der Anbieter- oder Adobe-App heruntergeladen werden.",
+        EPUB_IS_HTML: "Die Datei enthält eine Webseite statt eines EPUBs. Lade das Buch erneut über den eigentlichen Download-Link herunter.",
+        EPUB_NOT_ZIP: "Die Datei heißt zwar .epub, ist aber kein gültiges EPUB-Archiv.",
+        EPUB_TRUNCATED_ARCHIVE: "Das EPUB ist unvollständig oder beschädigt. Lade es erneut herunter und prüfe, ob es in einer anderen Reader-App geöffnet werden kann.",
+        EPUB_UNSUPPORTED_ZIP: "Dieses EPUB verwendet eine ZIP-Variante, die der Reader nicht verarbeiten kann. Öffnet es sich in einer anderen App, ist es ein Kompatibilitätsproblem unseres Readers."
+      };
+
+      if (error?.code && epubMessages[error.code]) {
+        return epubMessages[error.code];
+      }
+
+      if (isCentralDirectoryError(error)) {
+        return "Das EPUB ist kein vollständiges ZIP-Archiv. Lade die Datei erneut herunter oder kopiere sie zuerst in den lokalen Download-Ordner.";
+      }
+
       return "Die Datei konnte nicht gespeichert werden: " + errorMessage(error);
     }
 
