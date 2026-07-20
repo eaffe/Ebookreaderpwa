@@ -183,6 +183,36 @@
     .library-heading h2 { margin: 0; font-size: 21px; }
     .library-heading p { margin: 0; color: var(--muted); font-size: 13px; }
 
+    .library-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      max-width: 720px;
+      margin: 0 auto 14px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface-secondary);
+    }
+
+    .library-tab {
+      min-height: 42px;
+      border: 0;
+      border-radius: 9px;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .library-tab[aria-selected="true"] {
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: 0 1px 5px rgba(35, 31, 25, 0.1);
+    }
+
+    .library-tab:active { transform: scale(0.98); }
+
     .book-list {
       display: grid;
       gap: 12px;
@@ -270,13 +300,14 @@
 
     .book-actions {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: 1fr 1fr;
       gap: 8px;
       margin-top: auto;
       padding-top: 10px;
     }
 
     .open-book-button,
+    .archive-book-button,
     .delete-book-button {
       min-height: 40px;
       border-radius: 9px;
@@ -285,19 +316,28 @@
     }
 
     .open-book-button {
+      grid-column: 1 / -1;
       border: 0;
       color: var(--accent-text);
       background: var(--accent);
     }
 
+    .archive-book-button {
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: var(--surface-secondary);
+    }
+
     .delete-book-button {
-      padding: 0 12px;
+      padding: 0 10px;
       border: 1px solid #e5bcbc;
       color: var(--danger);
       background: var(--danger-background);
     }
 
     .open-book-button:active,
+    .archive-book-button:active,
     .delete-book-button:active { transform: scale(0.98); }
 
     .empty-library {
@@ -682,14 +722,23 @@
     <section class="content">
       <section id="library-view" class="library-view">
         <div id="library-heading" class="library-heading">
-          <h2>Bibliothek</h2>
+          <h2 id="library-section-title">Bibliothek</h2>
           <p id="book-count"></p>
+        </div>
+
+        <div class="library-tabs" role="tablist" aria-label="Bibliotheksbereich">
+          <button id="active-library-tab" class="library-tab" type="button" role="tab" aria-selected="true">
+            Bücher
+          </button>
+          <button id="archive-library-tab" class="library-tab" type="button" role="tab" aria-selected="false">
+            Archiv
+          </button>
         </div>
 
         <div id="empty-library" class="empty-library" hidden>
           <div class="empty-icon" aria-hidden="true">Aa</div>
-          <h2>Noch keine Bücher</h2>
-          <p>Tippe oben auf „+ Datei“ und wähle ein EPUB, PDF oder TXT aus.</p>
+          <h2 id="empty-library-title">Noch keine Bücher</h2>
+          <p id="empty-library-text">Tippe oben auf „+ Datei“ und wähle ein EPUB, PDF oder TXT aus.</p>
         </div>
 
         <div id="book-list" class="book-list"></div>
@@ -796,6 +845,8 @@
     let isPinching = false;
     let pinchState = null;
     let pendingDeleteBookId = null;
+    let currentLibrarySection = "active";
+    let handlingBackNavigation = false;
     const libraryCoverUrls = [];
     const pinchTargets = new WeakSet();
 
@@ -806,7 +857,12 @@
     const statusText = document.getElementById("status");
     const libraryView = document.getElementById("library-view");
     const libraryHeading = document.getElementById("library-heading");
+    const librarySectionTitle = document.getElementById("library-section-title");
+    const activeLibraryTab = document.getElementById("active-library-tab");
+    const archiveLibraryTab = document.getElementById("archive-library-tab");
     const emptyLibrary = document.getElementById("empty-library");
+    const emptyLibraryTitle = document.getElementById("empty-library-title");
+    const emptyLibraryText = document.getElementById("empty-library-text");
     const bookList = document.getElementById("book-list");
     const bookCount = document.getElementById("book-count");
     const readerView = document.getElementById("reader-view");
@@ -829,6 +885,7 @@
 
 
     registerServiceWorker();
+    installAndroidBackHandler();
 
     function registerServiceWorker() {
       if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
@@ -838,6 +895,42 @@
           console.warn("Service Worker konnte nicht registriert werden:", error);
         });
       });
+    }
+
+    function installAndroidBackHandler() {
+      const runsStandalone =
+        window.matchMedia("(display-mode: standalone)").matches ||
+        window.navigator.standalone === true;
+
+      if (!runsStandalone || !window.history?.pushState) return;
+
+      history.replaceState({ documentReaderRoot: true }, "", location.href);
+      history.pushState({ documentReaderGuard: true }, "", location.href);
+
+      window.addEventListener("popstate", handleAndroidBack);
+    }
+
+    async function handleAndroidBack() {
+      if (handlingBackNavigation) return;
+      handlingBackNavigation = true;
+
+      try {
+        if (!deleteDialogBackdrop.hidden) {
+          closeDeleteDialog();
+        } else if (!readerView.hidden) {
+          await showLibrary();
+        } else if (currentLibrarySection === "archive") {
+          currentLibrarySection = "active";
+          await renderLibrary();
+        } else {
+          showStatus("Du bist bereits in der Bibliothek.");
+        }
+      } catch (error) {
+        console.error("Zurück-Navigation fehlgeschlagen:", error);
+      } finally {
+        history.pushState({ documentReaderGuard: true }, "", location.href);
+        handlingBackNavigation = false;
+      }
     }
 
     startApplication();
@@ -872,6 +965,8 @@
     });
 
     libraryButton.addEventListener("click", showLibrary);
+    activeLibraryTab.addEventListener("click", () => selectLibrarySection("active"));
+    archiveLibraryTab.addEventListener("click", () => selectLibrarySection("archive"));
     previousButton.addEventListener("click", () => navigate("previous"));
     nextButton.addEventListener("click", () => navigate("next"));
     cancelDeleteButton.addEventListener("click", closeDeleteDialog);
@@ -898,6 +993,12 @@
       const openButton = target.closest("[data-open-book]");
       if (openButton) {
         await openStoredBook(openButton.getAttribute("data-open-book"));
+        return;
+      }
+
+      const archiveButton = target.closest("[data-archive-book]");
+      if (archiveButton) {
+        await toggleArchiveStatus(archiveButton.getAttribute("data-archive-book"));
         return;
       }
 
@@ -1161,6 +1262,7 @@
           fileBlob: file.slice(0, file.size, file.type || defaultMimeType(type)),
           coverBlob: details.coverBlob || null,
           coverChecked: true,
+          archived: false,
           addedAt: now,
           updatedAt: now,
           lastLocation: null,
@@ -2383,27 +2485,57 @@
       controls.hidden = true;
       libraryView.hidden = false;
       libraryButton.hidden = true;
-      pageTitle.textContent = "Meine Bücher";
 
       await renderLibrary();
     }
 
+    async function selectLibrarySection(section) {
+      const nextSection = section === "archive" ? "archive" : "active";
+      if (currentLibrarySection === nextSection) return;
+
+      currentLibrarySection = nextSection;
+      await renderLibrary();
+      libraryView.scrollTop = 0;
+    }
+
     async function renderLibrary() {
       releaseLibraryCoverUrls();
-      const books = await getAllBookRecords();
+      const allBooks = await getAllBookRecords();
 
-      for (const book of books) normalizeRecord(book);
-      await addMissingLegacyCovers(books);
-      books.sort((first, second) => second.updatedAt - first.updatedAt);
+      for (const book of allBooks) normalizeRecord(book);
+      await addMissingLegacyCovers(allBooks);
+      allBooks.sort((first, second) => second.updatedAt - first.updatedAt);
 
+      const showingArchive = currentLibrarySection === "archive";
+      const books = allBooks.filter(book => Boolean(book.archived) === showingArchive);
+      const activeCount = allBooks.filter(book => !book.archived).length;
+      const archiveCount = allBooks.length - activeCount;
+
+      activeLibraryTab.setAttribute("aria-selected", String(!showingArchive));
+      archiveLibraryTab.setAttribute("aria-selected", String(showingArchive));
+      activeLibraryTab.textContent = `Bücher (${activeCount})`;
+      archiveLibraryTab.textContent = `Archiv (${archiveCount})`;
+
+      pageTitle.textContent = showingArchive ? "Archiv" : "Meine Bücher";
+      librarySectionTitle.textContent = showingArchive ? "Archiv" : "Bibliothek";
       bookCount.textContent = books.length === 1 ? "1 Datei" : books.length + " Dateien";
 
       if (books.length === 0) {
         emptyLibrary.hidden = false;
-        libraryHeading.hidden = true;
+        libraryHeading.hidden = false;
         bookList.hidden = true;
         bookList.innerHTML = "";
-        showStatus("Noch keine Dateien lokal gespeichert");
+
+        if (showingArchive) {
+          emptyLibraryTitle.textContent = "Archiv ist leer";
+          emptyLibraryText.textContent = "Archivierte Bücher und Dokumente erscheinen hier und können jederzeit zurückgeholt werden.";
+          showStatus("Noch keine Dateien archiviert");
+        } else {
+          emptyLibraryTitle.textContent = "Noch keine Bücher";
+          emptyLibraryText.textContent = "Tippe oben auf „+ Datei“ und wähle ein EPUB, PDF oder TXT aus.";
+          showStatus("Noch keine Dateien lokal gespeichert");
+        }
+
         return;
       }
 
@@ -2411,7 +2543,9 @@
       libraryHeading.hidden = false;
       bookList.hidden = false;
       bookList.innerHTML = books.map(createBookCard).join("");
-      showStatus("EPUB, PDF und TXT · nur lokal gespeichert");
+      showStatus(showingArchive
+        ? "Archivierte Dateien · weiterhin nur lokal gespeichert"
+        : "EPUB, PDF und TXT · nur lokal gespeichert");
     }
 
     async function addMissingLegacyCovers(books) {
@@ -2467,6 +2601,9 @@
             <div class="book-actions">
               <button class="open-book-button" type="button" data-open-book="${escapeHtml(book.id)}">
                 ${hasProgress(book) ? "Weiterlesen" : "Öffnen"}
+              </button>
+              <button class="archive-book-button" type="button" data-archive-book="${escapeHtml(book.id)}">
+                ${book.archived ? "Zurückholen" : "Archivieren"}
               </button>
               <button class="delete-book-button" type="button" data-delete-book="${escapeHtml(book.id)}" aria-label="${escapeHtml(book.title)} löschen">
                 Löschen
@@ -2542,6 +2679,27 @@
         const maximum = Math.max(0, txtReader.scrollHeight - txtReader.clientHeight);
         previousButton.disabled = txtReader.scrollTop <= 2;
         nextButton.disabled = txtReader.scrollTop >= maximum - 2;
+      }
+    }
+
+    async function toggleArchiveStatus(bookId) {
+      if (!bookId) return;
+
+      try {
+        const record = await getBookRecord(bookId);
+        if (!record) return;
+
+        normalizeRecord(record);
+        record.archived = !record.archived;
+        record.updatedAt = Date.now();
+        await putBookRecord(record);
+        await renderLibrary();
+        showStatus(record.archived
+          ? "Datei wurde ins Archiv verschoben."
+          : "Datei wurde in die Bibliothek zurückgeholt.");
+      } catch (error) {
+        console.error(error);
+        showError("Der Archivstatus konnte nicht geändert werden.");
       }
     }
 
@@ -2752,6 +2910,7 @@
 
     function normalizeRecord(record) {
       if (!record.type) record.type = detectFileTypeFromName(record.fileName) || "epub";
+      if (typeof record.archived !== "boolean") record.archived = false;
       if (record.textScrollRatio == null) record.textScrollRatio = 0;
       if (record.epubZoom == null) record.epubZoom = 100;
       if (record.pdfZoom == null) record.pdfZoom = 100;
