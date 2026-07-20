@@ -1,4 +1,4 @@
-const CACHE_VERSION = "document-reader-v1";
+const CACHE_VERSION = "document-reader-v2";
 const APP_CACHE = CACHE_VERSION;
 
 const APP_SHELL = [
@@ -10,7 +10,7 @@ const APP_SHELL = [
 ];
 
 const REMOTE_LIBRARIES = [
-  "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+  "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.js",
   "https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js",
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs",
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs"
