@@ -1598,30 +1598,29 @@
       currentEpubRendition = currentEpubBook.renderTo("epub-viewer", {
         width: viewerWidth,
         height: viewerHeight,
+        method: "default",
         flow: "paginated",
         spread: "none",
         allowScriptedContent: false
       });
 
       currentEpubRendition.themes.default({
+        /*
+         * epub.js erzeugt die einzelnen Seiten mit CSS-Spalten. Breiten- oder
+         * Overflow-Regeln auf html/body würden diese Spalten auf eine einzige
+         * sichtbare Seite zusammendrücken. Deshalb darf epub.js die
+         * Dokumentbreite selbst verwalten.
+         */
         "html": {
-          "width": "auto !important",
-          "min-width": "0 !important",
-          "max-width": "100% !important",
           "margin": "0 !important",
           "padding": "0 !important",
-          "overflow-x": "hidden !important",
           "touch-action": "pan-x pan-y !important"
         },
         "body": {
-          "width": "auto !important",
-          "min-width": "0 !important",
-          "max-width": "100% !important",
           "margin": "0 !important",
           "padding-left": "16px !important",
           "padding-right": "16px !important",
           "box-sizing": "border-box !important",
-          "overflow-x": "hidden !important",
           "touch-action": "pan-x pan-y !important"
         },
         "body, body *": {
@@ -1661,26 +1660,15 @@
         const document = contents?.document;
         if (!document) return;
 
+        /*
+         * Nur die Touch-Gesten ergänzen. Keine Breite und kein overflow auf
+         * html/body setzen: Diese Werte werden von epub.js für die
+         * Seiteneinteilung benötigt.
+         */
         document.documentElement.style.touchAction = "pan-x pan-y";
-        document.documentElement.style.width = "100%";
-        document.documentElement.style.minWidth = "0";
-        document.documentElement.style.maxWidth = "100%";
-        document.documentElement.style.overflowX = "hidden";
-
-        let viewportMeta = document.querySelector('meta[name="viewport"]');
-        if (!viewportMeta) {
-          viewportMeta = document.createElement("meta");
-          viewportMeta.setAttribute("name", "viewport");
-          document.head?.appendChild(viewportMeta);
-        }
-        viewportMeta.setAttribute("content", "width=device-width, initial-scale=1");
 
         if (document.body) {
           document.body.style.touchAction = "pan-x pan-y";
-          document.body.style.width = "100%";
-          document.body.style.minWidth = "0";
-          document.body.style.maxWidth = "100%";
-          document.body.style.overflowX = "hidden";
         }
 
         installPinchHandlers(document, "epub");
