@@ -824,6 +824,8 @@
     let currentEpubRendition = null;
     let currentEpubLocation = null;
     let currentEpubZoom = 100;
+    let currentEpubDisplayedPage = 1;
+    let currentEpubDisplayedTotal = 1;
 
     let currentPdfDocument = null;
     let currentPdfLoadingTask = null;
@@ -1600,47 +1602,48 @@
         height: viewerHeight,
         manager: "default",
         view: "iframe",
+        layout: "reflowable",
         flow: "paginated",
         spread: "none",
         minSpreadWidth: Number.MAX_SAFE_INTEGER,
         allowScriptedContent: false
       });
 
+      /*
+       * Einige EPUBs deklarieren sich fälschlich als "pre-paginated".
+       * epub.js behandelt dann jeden Spine-Eintrag als eine einzige Seite,
+       * wodurch next()/prev() direkt zum nächsten Kapitel springen. Wir
+       * erzwingen für den Textreader deshalb ein reflowable Seitenlayout.
+       */
+      currentEpubRendition.layout({
+        layout: "reflowable",
+        flow: "paginated",
+        spread: "none",
+        minSpreadWidth: Number.MAX_SAFE_INTEGER
+      });
+
       currentEpubRendition.themes.default({
         /*
-         * epub.js erzeugt die einzelnen Seiten mit CSS-Spalten. Breiten- oder
-         * Overflow-Regeln auf html/body würden diese Spalten auf eine einzige
-         * sichtbare Seite zusammendrücken. Deshalb darf epub.js die
-         * Dokumentbreite selbst verwalten.
+         * epub.js setzt für reflowable EPUBs selbst CSS-Spalten. Darum werden
+         * Breite, max-width, overflow und Spaltenwerte von html/body hier nicht
+         * überschrieben. Das gilt auch für allgemeine div/section-Regeln.
          */
         "html": {
           "margin": "0 !important",
-          "padding": "0 !important",
           "touch-action": "pan-x pan-y !important"
         },
         "body": {
           "margin": "0 !important",
-          "padding-left": "16px !important",
-          "padding-right": "16px !important",
-          "box-sizing": "border-box !important",
           "touch-action": "pan-x pan-y !important"
         },
         "body, body *": {
           "box-sizing": "border-box !important"
         },
-        "body > *, main, section, article, header, footer, aside, figure, figcaption, blockquote, p, div": {
-          "min-width": "0 !important",
-          "max-width": "100% !important"
-        },
-        "p, li, div, span, blockquote, figcaption": {
+        "p, li, blockquote, figcaption, h1, h2, h3, h4, h5, h6": {
           "overflow-wrap": "anywhere !important",
           "word-break": "normal !important"
         },
-        "figure, blockquote": {
-          "margin-left": "0 !important",
-          "margin-right": "0 !important"
-        },
-        "img, svg, video, canvas, object, iframe": {
+        "img, svg, video, canvas, object": {
           "max-width": "100% !important",
           "max-height": "90vh !important",
           "height": "auto !important",
@@ -1648,7 +1651,6 @@
         },
         "table": {
           "max-width": "100% !important",
-          "width": "100% !important",
           "table-layout": "fixed !important"
         },
         "pre, code": {
@@ -1681,8 +1683,21 @@
       currentEpubRendition.on("relocated", function (location) {
         const cfi = location?.start?.cfi;
         if (!cfi || !currentBookRecord) return;
+
         currentEpubLocation = cfi;
         currentBookRecord.lastLocation = cfi;
+
+        const displayedPage = Number(location?.start?.displayed?.page);
+        const displayedTotal = Number(location?.start?.displayed?.total);
+
+        currentEpubDisplayedPage = Number.isFinite(displayedPage) && displayedPage > 0
+          ? displayedPage
+          : 1;
+        currentEpubDisplayedTotal = Number.isFinite(displayedTotal) && displayedTotal > 0
+          ? displayedTotal
+          : 1;
+
+        updateReaderStatus();
         scheduleProgressSave();
       });
 
@@ -1735,6 +1750,10 @@
         height,
         currentEpubLocation || currentBookRecord?.lastLocation || undefined
       );
+
+      if (typeof currentEpubRendition.reportLocation === "function") {
+        await currentEpubRendition.reportLocation();
+      }
     }
 
     async function openPdf(record) {
@@ -2617,7 +2636,10 @@
 
       if (currentBookType === "epub") {
         const description = currentBookRecord.author || currentBookRecord.fileName;
-        showStatus(`${description} · Schrift ${currentEpubZoom} % · Zwei Finger zum Zoomen`);
+        const pageInfo = currentEpubDisplayedTotal > 1
+          ? ` · Seite ${currentEpubDisplayedPage} von ${currentEpubDisplayedTotal}`
+          : "";
+        showStatus(`${description}${pageInfo} · Schrift ${currentEpubZoom} % · Zwei Finger zum Zoomen`);
       }
 
       if (currentBookType === "pdf") {
@@ -2773,6 +2795,8 @@
       currentEpubBook = null;
       currentEpubLocation = null;
       currentEpubZoom = 100;
+      currentEpubDisplayedPage = 1;
+      currentEpubDisplayedTotal = 1;
 
       currentBookRecord = null;
       currentBookType = null;
