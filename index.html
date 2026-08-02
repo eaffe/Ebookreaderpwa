@@ -412,13 +412,13 @@
       transform-origin: center center;
     }
 
-    #epub-viewer > div,
-    #epub-viewer iframe,
-    #epub-viewer .epub-container {
-      width: 100% !important;
-      max-width: 100% !important;
-    }
-
+    /*
+     * Wichtig: Die von epub.js erzeugten View- und Iframe-Breiten dürfen hier
+     * nicht überschrieben werden. Bei paginierten EPUBs erweitert epub.js das
+     * Iframe intern auf mehrere Seitenspalten. width/max-width: 100% würde
+     * daraus wieder genau eine Spalte machen, sodass next()/prev() direkt zum
+     * nächsten beziehungsweise vorherigen Spine-Abschnitt springen.
+     */
     #epub-viewer iframe {
       border: 0 !important;
     }
@@ -1598,9 +1598,11 @@
       currentEpubRendition = currentEpubBook.renderTo("epub-viewer", {
         width: viewerWidth,
         height: viewerHeight,
-        method: "default",
+        manager: "default",
+        view: "iframe",
         flow: "paginated",
         spread: "none",
+        minSpreadWidth: Number.MAX_SAFE_INTEGER,
         allowScriptedContent: false
       });
 
@@ -1684,10 +1686,6 @@
         scheduleProgressSave();
       });
 
-      currentEpubRendition.on("rendered", function () {
-        enforceEpubViewportWidth();
-      });
-
       if (record.lastLocation) {
         try {
           await currentEpubRendition.display(record.lastLocation);
@@ -1722,30 +1720,21 @@
       return Math.max(1, Math.floor(Math.min(...candidates)));
     }
 
-    function enforceEpubViewportWidth() {
-      const width = getSafeReaderWidth(epubViewer);
-      epubViewer.style.width = width + "px";
-      epubViewer.style.maxWidth = "100%";
-
-      epubViewer.querySelectorAll("div, iframe").forEach(function (element) {
-        element.style.maxWidth = "100%";
-
-        if (element.tagName === "IFRAME") {
-          element.style.width = width + "px";
-          element.style.maxWidth = "100%";
-          element.style.border = "0";
-        }
-      });
-    }
-
     async function resizeEpubToViewport() {
       if (!currentEpubRendition) return;
       await waitForLayout();
 
       const width = getSafeReaderWidth(epubViewer);
       const height = Math.max(1, Math.floor(epubViewer.clientHeight));
-      currentEpubRendition.resize(width, height);
-      enforceEpubViewportWidth();
+      /*
+       * Nur die Rendition selbst über die öffentliche epub.js-API skalieren.
+       * Keine Breiten an den intern erzeugten Views oder Iframes setzen.
+       */
+      currentEpubRendition.resize(
+        width,
+        height,
+        currentEpubLocation || currentBookRecord?.lastLocation || undefined
+      );
     }
 
     async function openPdf(record) {
