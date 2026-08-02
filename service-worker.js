@@ -1,4 +1,4 @@
-const CACHE_VERSION = "document-reader-v3";
+const CACHE_VERSION = "document-reader-v4";
 const APP_CACHE = CACHE_VERSION;
 
 const APP_SHELL = [
@@ -26,7 +26,10 @@ self.addEventListener("install", function (event) {
     await Promise.allSettled(
       REMOTE_LIBRARIES.map(async function (url) {
         const response = await fetch(url, { mode: "cors" });
-        if (response.ok) await cache.put(url, response);
+
+        if (response.ok) {
+          await cache.put(url, response);
+        }
       })
     );
 
@@ -41,7 +44,10 @@ self.addEventListener("activate", function (event) {
     await Promise.all(
       cacheNames
         .filter(function (name) {
-          return name.startsWith("document-reader-") && name !== APP_CACHE;
+          return (
+            name.startsWith("document-reader-") &&
+            name !== APP_CACHE
+          );
         })
         .map(function (name) {
           return caches.delete(name);
@@ -55,26 +61,44 @@ self.addEventListener("activate", function (event) {
 self.addEventListener("fetch", function (event) {
   const request = event.request;
 
-  if (request.method !== "GET") return;
+  if (request.method !== "GET") {
+    return;
+  }
 
   const url = new URL(request.url);
-  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
+  if (
+    url.protocol !== "http:" &&
+    url.protocol !== "https:"
+  ) {
+    return;
+  }
 
   if (request.mode === "navigate") {
     event.respondWith((async function () {
       try {
         const response = await fetch(request);
         const cache = await caches.open(APP_CACHE);
-        await cache.put("./index.html", response.clone());
+
+        await cache.put(
+          "./index.html",
+          response.clone()
+        );
+
         return response;
       } catch (error) {
         return (
           await caches.match("./index.html") ||
           await caches.match("./") ||
-          new Response("Die App ist offline noch nicht vollständig gespeichert.", {
-            status: 503,
-            headers: { "Content-Type": "text/plain; charset=utf-8" }
-          })
+          new Response(
+            "Die App ist offline noch nicht vollständig gespeichert.",
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "text/plain; charset=utf-8"
+              }
+            }
+          )
         );
       }
     })());
@@ -84,19 +108,32 @@ self.addEventListener("fetch", function (event) {
 
   event.respondWith((async function () {
     const cached = await caches.match(request);
-    if (cached) return cached;
+
+    if (cached) {
+      return cached;
+    }
 
     try {
       const response = await fetch(request);
 
-      if (response.ok || response.type === "opaque") {
+      if (
+        response.ok ||
+        response.type === "opaque"
+      ) {
         const cache = await caches.open(APP_CACHE);
-        await cache.put(request, response.clone());
+
+        await cache.put(
+          request,
+          response.clone()
+        );
       }
 
       return response;
     } catch (error) {
-      return new Response("", { status: 504, statusText: "Offline" });
+      return new Response("", {
+        status: 504,
+        statusText: "Offline"
+      });
     }
   })());
 });
