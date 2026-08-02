@@ -1,4 +1,4 @@
-const CACHE_VERSION = "document-reader-v4";
+const CACHE_VERSION = "document-reader-v5";
 const APP_CACHE = CACHE_VERSION;
 
 const APP_SHELL = [
